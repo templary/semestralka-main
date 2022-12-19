@@ -1,0 +1,109 @@
+name: Build and test eshop
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  Install:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v3.5.1
+        with:
+          node-version: 10
+      - name: Cache node modules
+        uses: actions/cache@v3.0.11
+        with:
+          path: node_modules
+          key: node_modules-${{ hashFiles('**/package-lock.json') }}
+      - name: Install packages with NPM
+        run: |
+          npm ci
+
+  Build:
+    needs: Install
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v3.5.1
+        with:
+          node-version: 10
+
+      - name: Cache node modules
+        uses: actions/cache@v3.0.11
+        with:
+          path: node_modules
+          key: node_modules-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Build
+        run: |
+          npm rebuild node-sass --force
+          npm run build -- --colors
+      
+      - name: Cache node modules and Build folder
+        if: ${{ github.ref == 'refs/heads/main' }}
+        uses: actions/cache@v3.0.11
+        with:
+          path: |
+            ~/.npm
+            ./node_modules
+            ./build
+          key: ${{ runner.os }}--build-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}--build-${{ github.run_id }}
+
+  Test:
+    needs: Install
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v3.5.1
+        with:
+          node-version: 10
+
+      - name: Cache node modules
+        uses: actions/cache@v3.0.11
+        with:
+          path: node_modules
+          key: node_modules-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Run tests
+        run: |
+          npm run test -- --colors
+
+  Deploy:
+    needs: [Build, Test]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10' 
+
+      - name: Install ansible
+        run: pip3 install ansible boto boto3 
+
+      - name: Run playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          echo "${{ secrets.ANSIBLE_VAULT_PASSWORD }}" > .ansible_vault_password
+          echo "${{ secrets.EC2_SSH_KEY }}" > .ec2_ssh_key.pem
+          chmod 400 .ec2_ssh_key.pem
+          ansible-playbook ansible/ec2_deploy.yml --vault-password-file .ansible_vault_password --key-file .ec2_ssh_key.pem --user ec2-user
